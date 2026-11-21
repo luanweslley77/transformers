@@ -523,7 +523,8 @@ class WhisperGenerationMixin(GenerationMixin):
             return_token_timestamps (`bool`, *optional*):
                 Whether to return token-level timestamps with the text. This can be used with or without the
                 `return_timestamps` option. To get word-level timestamps, use the tokenizer to group the tokens into
-                words.
+                words. Encoder self-attention maps are not returned for this option unless `output_attentions=True`
+                is also passed.
             return_segments (`bool`, *optional*, defaults to `False`):
                 Whether to additionally return a list of all segments. Note that this option can only be enabled
                 when doing long-form transcription.
@@ -1385,10 +1386,13 @@ class WhisperGenerationMixin(GenerationMixin):
         else:
             generation_config.return_dict_in_generate = return_dict_in_generate
 
+        # Token timestamps only consume decoder cross-attentions. Request those on their own so the
+        # encoder does not materialize self-attention maps; an explicit `output_attentions=True`
+        # request is left untouched, so encoder attentions keep being returned.
         generation_config.return_token_timestamps = return_token_timestamps
         if return_token_timestamps:
             generation_config.return_dict_in_generate = True
-            generation_config.output_attentions = True
+            generation_config.output_cross_attentions = True
             generation_config.output_scores = True
 
         if logprob_threshold is not None:

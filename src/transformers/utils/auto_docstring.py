@@ -2577,7 +2577,7 @@ class ModelOutputArgs:
     weighted average in the cross-attention heads.
     """,
         "shape": None,
-        "additional_info": "returned when `output_attentions=True` is passed or when `config.output_attentions=True`",
+        "additional_info": "returned when `output_attentions=True` or `output_cross_attentions=True` is passed",
     }
 
     decoder_hidden_states = {
