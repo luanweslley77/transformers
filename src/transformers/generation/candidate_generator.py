@@ -115,6 +115,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         self.assistant_generation_config = copy.deepcopy(assistant_model.generation_config)
         global_defaults = self.assistant_generation_config._get_default_generation_params()
         self.assistant_generation_config.update(**global_defaults, defaults_only=True)
+        self.assistant_generation_config.output_cross_attentions = False
         self.num_assistant_tokens = self.assistant_generation_config.num_assistant_tokens
         self.assistant_confidence_threshold = self.assistant_generation_config.assistant_confidence_threshold
 
@@ -128,6 +129,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
                 assistant_kwargs[key] = (
                     value.detach().to(device) if isinstance(value, torch.Tensor) else copy.deepcopy(value)
                 )
+        assistant_kwargs.pop("output_cross_attentions", None)
 
         # Remove potential default "logits_to_keep" key
         if "logits_to_keep" in assistant_kwargs and not assistant_model._supports_logits_to_keep():
@@ -165,6 +167,7 @@ class AssistedCandidateGenerator(CandidateGenerator):
         # Prepare generation-related options.
         self.logits_processor = logits_processor if logits_processor is not None else LogitsProcessorList()
         self.generation_config = copy.deepcopy(generation_config)
+        self.generation_config.output_cross_attentions = False
 
         self.generation_config.return_dict_in_generate = True
         self.generation_config.output_scores = True
@@ -1273,7 +1276,9 @@ class SinglePositionMultiTokenCandidateGenerator(CandidateGenerator):
         self.target_model_input_embeddings = target_model_input_embeddings
 
         self.assistant_generation_config = copy.deepcopy(assistant_model.generation_config)
+        self.assistant_generation_config.output_cross_attentions = False
         self.generation_config = copy.deepcopy(generation_config)
+        self.generation_config.output_cross_attentions = False
         self.num_assistant_tokens = self.assistant_generation_config.num_assistant_tokens
         self.main_model_max_length = self.generation_config.max_length
 

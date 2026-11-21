@@ -933,6 +933,8 @@ class TransformersKwargs(TypedDict, total=False):
             Most of the models support outputting all hidden states computed during the forward pass.
         output_attentions (`Optional[bool]`, *optional*):
             Turn this on to return the intermediary attention scores.
+        output_cross_attentions (`Optional[bool]`, *optional*):
+            Turn this on to return only the cross-attention scores of encoder-decoder models.
         output_router_logits (`Optional[bool]`, *optional*):
             For MoE models, this allows returning the router logits to compute the loss.
         cu_seq_lens_q (`torch.LongTensor`, *optional*)
@@ -954,6 +956,7 @@ class TransformersKwargs(TypedDict, total=False):
     num_items_in_batch: torch.Tensor | None
     output_hidden_states: bool | None
     output_attentions: bool | None
+    output_cross_attentions: bool | None
     output_router_logits: bool | None
     cu_seq_lens_q: torch.LongTensor | None
     cu_seq_lens_k: torch.LongTensor | None

@@ -499,6 +499,44 @@ class BartModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin
         model.generate(input_ids, attention_mask=attention_mask)
         model.generate(num_beams=4, do_sample=True, early_stopping=False, num_return_sequences=3)
 
+    def test_generate_output_cross_attentions(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
+        config._attn_implementation = "eager"
+        input_ids = inputs_dict["input_ids"].to(torch_device)
+        attention_mask = inputs_dict["attention_mask"].to(torch_device)
+        model = BartForConditionalGeneration(config).to(torch_device).eval()
+        num_decoder_layers = len(model.get_decoder().layers)
+
+        outputs = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_cross_attentions=True,
+            output_attentions=False,
+        )
+        self.assertTrue(outputs.cross_attentions)
+        self.assertEqual(len(outputs.cross_attentions[0]), num_decoder_layers)
+        cross_attention = outputs.cross_attentions[0][0]
+        self.assertEqual(cross_attention.shape[0], input_ids.shape[0])
+        self.assertEqual(cross_attention.shape[1], config.decoder_attention_heads)
+        self.assertEqual(cross_attention.shape[-1], input_ids.shape[-1])
+        self.assertIsNone(outputs.decoder_attentions)
+        self.assertIsNone(outputs.encoder_attentions)
+
+        outputs_all = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_attentions=True,
+        )
+        self.assertIsNotNone(outputs_all.cross_attentions)
+        self.assertIsNotNone(outputs_all.decoder_attentions)
+        self.assertIsNotNone(outputs_all.encoder_attentions)
+
     @unittest.skip(
         reason="This architecture has tied weights by default and there is no way to remove it, check: https://github.com/huggingface/transformers/pull/31771#issuecomment-2210915245"
     )

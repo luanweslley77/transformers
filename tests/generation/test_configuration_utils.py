@@ -146,6 +146,16 @@ class GenerationConfigTest(unittest.TestCase):
         self.assertEqual(loaded_config.do_sample, True)
         self.assertEqual(loaded_config.num_beams, None)  # default value
 
+    def test_output_cross_attentions_serialization(self):
+        config = GenerationConfig(output_cross_attentions=True, return_dict_in_generate=True)
+        self.assertTrue(config.to_dict()["output_cross_attentions"])
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config.save_pretrained(tmp_dir)
+            loaded_config = GenerationConfig.from_pretrained(tmp_dir)
+
+        self.assertTrue(loaded_config.output_cross_attentions)
+
     def test_validate(self):
         """
         Tests that the `validate` method is working as expected. Note that `validate` is called at initialization time

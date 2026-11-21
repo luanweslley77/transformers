@@ -42,7 +42,7 @@ Apply `@capture_outputs` to the base model's `forward()` method. It attaches for
 - Collect per-layer attention weights and hidden states into tuples.
 - Inject collected values into the returned [`ModelOutput`] dataclass.
 - Convert the dataclass to a plain tuple when `return_dict=False`.
-- Resolve `output_attentions` and `output_hidden_states` from kwargs or `self.config` when `None`.
+- Resolve `output_attentions` and `output_hidden_states` from kwargs or `self.config` when `None`. Cross-attentions are captured when `output_cross_attentions` or `output_attentions` is set.
 
 ## Map output fields to submodules
 

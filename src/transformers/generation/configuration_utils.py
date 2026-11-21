@@ -279,6 +279,11 @@ class GenerationConfig(PushToHubMixin):
         output_attentions (`bool`):
             Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
             tensors for more details.
+        output_cross_attentions (`bool`):
+            Whether or not to return the cross-attention tensors of all attention layers. Only relevant for
+            encoder-decoder models. See `cross_attentions` under returned tensors for more details. Generation raises
+            a clear error when the decoder uses an attention implementation that does not return weights; load the
+            model with `attn_implementation="eager"` in that case.
         output_hidden_states (`bool`):
             Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
             more details.
@@ -367,7 +372,13 @@ class GenerationConfig(PushToHubMixin):
             need to use this flag.
     """
 
-    extra_output_flags = ("output_attentions", "output_hidden_states", "output_scores", "output_logits")
+    extra_output_flags = (
+        "output_attentions",
+        "output_cross_attentions",
+        "output_hidden_states",
+        "output_scores",
+        "output_logits",
+    )
 
     # Tensor versions of token IDs, set by _prepare_special_tokens() at generation time
     _bos_token_tensor: "torch.Tensor | None"
@@ -440,6 +451,7 @@ class GenerationConfig(PushToHubMixin):
         # Parameters that define the output variables of `generate`
         self.num_return_sequences = kwargs.pop("num_return_sequences", None)
         self.output_attentions = kwargs.pop("output_attentions", None)
+        self.output_cross_attentions = kwargs.pop("output_cross_attentions", None)
         self.output_hidden_states = kwargs.pop("output_hidden_states", None)
         self.output_scores = kwargs.pop("output_scores", None)
         self.output_logits = kwargs.pop("output_logits", None)

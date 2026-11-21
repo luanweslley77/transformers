@@ -242,7 +242,8 @@ class GenerateEncoderDecoderOutput(ModelOutput):
         decoder_attentions (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_attentions=True`):
             Tuple (one element for each generated token) of tuples (one element for each layer of the decoder) of
             `torch.Tensor` of shape `(batch_size, num_heads, generated_length, sequence_length)`.
-        cross_attentions (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_attentions=True`):
+        cross_attentions (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_attentions=True` or
+        `output_cross_attentions=True`):
             Tuple (one element for each generated token) of tuples (one element for each layer of the decoder) of
             `torch.Tensor` of shape `(batch_size, num_heads, generated_length, sequence_length)`.
         decoder_hidden_states (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_hidden_states=True`):
@@ -341,7 +342,8 @@ class GenerateBeamEncoderDecoderOutput(ModelOutput):
             Tuple (one element for each generated token) of tuples (one element for each layer of the decoder) of
             `torch.Tensor` of shape `(batch_size*num_beams*num_return_sequences, num_heads, generated_length,
             sequence_length)`.
-        cross_attentions (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_attentions=True`):
+        cross_attentions (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_attentions=True` or
+        `output_cross_attentions=True`):
             Tuple (one element for each generated token) of tuples (one element for each layer of the decoder) of
             `torch.Tensor` of shape `(batch_size, num_heads, generated_length, sequence_length)`.
         decoder_hidden_states (`tuple(tuple(torch.Tensor))`, *optional*, returned when `output_hidden_states=True`):
@@ -1008,7 +1010,7 @@ class GenerationMixin(ContinuousMixin):
                 add_hook_to_module(encoder, AlignDevicesHook(io_same_device=True))
 
         # 2. Prepare encoder args and encoder kwargs from model kwargs and generation config.
-        irrelevant_prefix = ["decoder_", "cross_attn", "use_cache", "cache"]
+        irrelevant_prefix = ["decoder_", "cross_attn", "output_cross_attentions", "use_cache", "cache"]
         encoder_kwargs = {
             argument: value
             for argument, value in model_kwargs.items()
@@ -2136,8 +2138,10 @@ class GenerationMixin(ContinuousMixin):
 
         # Finally keep output_xxx args in `model_kwargs` so it can be passed to `forward`
         output_attentions = generation_config.output_attentions
+        output_cross_attentions = generation_config.output_cross_attentions
         output_hidden_states = generation_config.output_hidden_states
         model_kwargs.update({"output_attentions": output_attentions} if output_attentions else {})
+        model_kwargs.update({"output_cross_attentions": output_cross_attentions} if output_cross_attentions else {})
         model_kwargs.update({"output_hidden_states": output_hidden_states} if output_hidden_states else {})
 
         return generation_config, model_kwargs
@@ -2794,6 +2798,34 @@ class GenerationMixin(ContinuousMixin):
         )
         generation_config, model_kwargs = self._prepare_generation_config(generation_config, **kwargs)
 
+        # `output_cross_attentions` can only be honored when the returned dictionary is requested and the decoder
+        # uses an implementation that returns weights. `GenerationConfig.validate()` already warns when the flag
+        # is ignored; here we fail fast instead of silently returning empty attention tuples.
+        if (
+            generation_config.output_cross_attentions
+            and self.config.is_encoder_decoder
+            and generation_config.return_dict_in_generate
+        ):
+            try:
+                decoder = self.get_decoder()
+            except (AttributeError, NotImplementedError):
+                decoder = self
+            implementation = getattr(decoder.config, "_attn_implementation", None)
+            if implementation not in ("eager", "paged|eager"):
+                raise ValueError(
+                    "`output_cross_attentions=True` requires an attention implementation that returns attention "
+                    f"weights, but the decoder uses `{implementation}`. Load the model with "
+                    "`attn_implementation='eager'`."
+                )
+
+            from ..utils.output_capturing import _CAN_RECORD_REGISTRY
+
+            if "cross_attentions" not in _CAN_RECORD_REGISTRY.get(decoder):
+                raise ValueError(
+                    f"`output_cross_attentions=True` is not supported by {self.__class__.__name__}: its decoder does "
+                    "not record cross-attentions."
+                )
+
         generation_mode = generation_config.get_generation_mode(assistant_model)
         deprecated_mode_repo = self._get_deprecated_gen_repo(generation_mode, trust_remote_code, custom_generate)
 
@@ -3165,6 +3197,7 @@ class GenerationMixin(ContinuousMixin):
         # init values
         pad_token_id = generation_config._pad_token_tensor
         output_attentions = generation_config.output_attentions
+        output_cross_attentions = generation_config.output_cross_attentions
         output_hidden_states = generation_config.output_hidden_states
         output_scores = generation_config.output_scores
         output_logits = generation_config.output_logits
@@ -3176,7 +3209,7 @@ class GenerationMixin(ContinuousMixin):
         scores = () if (return_dict_in_generate and output_scores) else None
         raw_logits = () if (return_dict_in_generate and output_logits) else None
         decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
-        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
+        cross_attentions = () if (return_dict_in_generate and (output_attentions or output_cross_attentions)) else None
         decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
 
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
@@ -3260,7 +3293,8 @@ class GenerationMixin(ContinuousMixin):
                         decoder_attentions += (
                             (outputs.decoder_attentions,) if self.config.is_encoder_decoder else (outputs.attentions,)
                         )
-                        if self.config.is_encoder_decoder:
+                    if self.config.is_encoder_decoder and (output_attentions or output_cross_attentions):
+                        if outputs.cross_attentions is not None:
                             cross_attentions += (outputs.cross_attentions,)
 
                     if output_hidden_states:
@@ -3623,6 +3657,7 @@ class GenerationMixin(ContinuousMixin):
         pad_token_id = generation_config._pad_token_tensor
         eos_token_id = generation_config._eos_token_tensor
         output_attentions = generation_config.output_attentions
+        output_cross_attentions = generation_config.output_cross_attentions
         output_hidden_states = generation_config.output_hidden_states
         output_scores = generation_config.output_scores
         output_logits = generation_config.output_logits
@@ -3664,7 +3699,7 @@ class GenerationMixin(ContinuousMixin):
         raw_logits = () if (return_dict_in_generate and output_logits) else None
         beam_indices = () if (return_dict_in_generate and output_logits) else None
         decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
-        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
+        cross_attentions = () if (return_dict_in_generate and (output_attentions or output_cross_attentions)) else None
         decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
 
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
@@ -3762,7 +3797,8 @@ class GenerationMixin(ContinuousMixin):
                         if self.config.is_encoder_decoder
                         else (model_outputs.attentions,)
                     )
-                    if self.config.is_encoder_decoder:
+                if self.config.is_encoder_decoder and (output_attentions or output_cross_attentions):
+                    if model_outputs.cross_attentions is not None:
                         cross_attentions += (model_outputs.cross_attentions,)
 
                 if output_hidden_states:
@@ -3999,6 +4035,7 @@ class GenerationMixin(ContinuousMixin):
         # init values
         do_sample = generation_config.do_sample
         output_attentions = generation_config.output_attentions
+        output_cross_attentions = generation_config.output_cross_attentions
         output_hidden_states = generation_config.output_hidden_states
         output_scores = generation_config.output_scores
         output_logits = generation_config.output_logits
@@ -4008,7 +4045,7 @@ class GenerationMixin(ContinuousMixin):
         scores = () if (return_dict_in_generate and output_scores) else None
         raw_logits = () if (return_dict_in_generate and output_logits) else None
         decoder_attentions = () if (return_dict_in_generate and output_attentions) else None
-        cross_attentions = () if (return_dict_in_generate and output_attentions) else None
+        cross_attentions = () if (return_dict_in_generate and (output_attentions or output_cross_attentions)) else None
         decoder_hidden_states = () if (return_dict_in_generate and output_hidden_states) else None
 
         # if model is an encoder-decoder, retrieve encoder attention weights and hidden states
@@ -4206,9 +4243,6 @@ class GenerationMixin(ContinuousMixin):
                 newly_added_length = new_cur_len if is_first_iteration else newly_added_length
                 if output_attentions:
                     if self.config.is_encoder_decoder:
-                        cross_attentions = _split_model_outputs(
-                            cross_attentions, outputs.cross_attentions, cur_len, newly_added_length
-                        )
                         decoder_attentions = _split_model_outputs(
                             decoder_attentions,
                             outputs.decoder_attentions,
@@ -4224,6 +4258,11 @@ class GenerationMixin(ContinuousMixin):
                             cur_len,
                             newly_added_length,
                             is_decoder_attention=True,
+                        )
+                if self.config.is_encoder_decoder and (output_attentions or output_cross_attentions):
+                    if outputs.cross_attentions is not None:
+                        cross_attentions = _split_model_outputs(
+                            cross_attentions, outputs.cross_attentions, cur_len, newly_added_length
                         )
                 if output_hidden_states:
                     if self.config.is_encoder_decoder:

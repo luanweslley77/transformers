@@ -672,6 +672,125 @@ class T5ModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, 
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         self.model_tester.create_and_check_generate_with_cache(*config_and_inputs)
 
+    def test_generate_output_cross_attentions(self):
+        config, input_ids, _, attention_mask, _, _ = self.model_tester.prepare_config_and_inputs()
+        config._attn_implementation = "eager"
+        input_ids = input_ids.to(torch_device)
+        attention_mask = attention_mask.to(torch_device)
+        model = T5ForConditionalGeneration(config).to(torch_device).eval()
+        num_decoder_layers = len(model.get_decoder().block)
+
+        outputs = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_cross_attentions=True,
+            output_attentions=False,
+        )
+        self.assertTrue(outputs.cross_attentions)
+        self.assertEqual(len(outputs.cross_attentions[0]), num_decoder_layers)
+        cross_attention = outputs.cross_attentions[0][0]
+        self.assertEqual(cross_attention.shape[0], input_ids.shape[0])
+        self.assertEqual(cross_attention.shape[1], config.num_heads)
+        self.assertEqual(cross_attention.shape[-1], input_ids.shape[-1])
+        self.assertIsNone(outputs.decoder_attentions)
+        self.assertIsNone(outputs.encoder_attentions)
+
+        # `output_attentions` keeps its BC behavior and returns cross attentions too.
+        outputs_all = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_attentions=True,
+        )
+        self.assertIsNotNone(outputs_all.cross_attentions)
+        self.assertIsNotNone(outputs_all.decoder_attentions)
+        self.assertIsNotNone(outputs_all.encoder_attentions)
+
+        # Explicitly disabling the new flag must not remove the cross attentions that `output_attentions` returns.
+        outputs_bc = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_attentions=True,
+            output_cross_attentions=False,
+        )
+        self.assertIsNotNone(outputs_bc.cross_attentions)
+
+        outputs_beam = model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=3,
+            do_sample=False,
+            num_beams=2,
+            return_dict_in_generate=True,
+            output_cross_attentions=True,
+            output_attentions=False,
+        )
+        self.assertTrue(outputs_beam.cross_attentions)
+        self.assertEqual(outputs_beam.cross_attentions[0][0].shape[0], input_ids.shape[0] * 2)
+        self.assertIsNone(outputs_beam.decoder_attentions)
+
+    def test_generate_output_cross_attentions_with_assistant(self):
+        config, input_ids, _, attention_mask, _, _ = self.model_tester.prepare_config_and_inputs()
+        config._attn_implementation = "eager"
+        model = T5ForConditionalGeneration(config).to(torch_device).eval()
+
+        assistant_config = T5Config(**config.to_dict())
+        assistant_config._attn_implementation = "sdpa"
+        assistant_model = T5ForConditionalGeneration(assistant_config).to(torch_device).eval()
+
+        outputs = model.generate(
+            input_ids[:1].to(torch_device),
+            attention_mask=attention_mask[:1].to(torch_device),
+            assistant_model=assistant_model,
+            max_new_tokens=3,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_cross_attentions=True,
+            output_attentions=False,
+        )
+        self.assertTrue(outputs.cross_attentions)
+        self.assertIsNone(outputs.decoder_attentions)
+        self.assertEqual(assistant_model.config._attn_implementation, "sdpa")
+
+    def test_generate_output_cross_attentions_requires_eager(self):
+        config, input_ids, _, attention_mask, _, _ = self.model_tester.prepare_config_and_inputs()
+        config._attn_implementation = "sdpa"
+        model = T5ForConditionalGeneration(config).to(torch_device).eval()
+
+        with self.assertRaisesRegex(ValueError, "Load the model with"):
+            model.generate(
+                input_ids.to(torch_device),
+                attention_mask=attention_mask.to(torch_device),
+                max_new_tokens=3,
+                do_sample=False,
+                return_dict_in_generate=True,
+                output_cross_attentions=True,
+            )
+        self.assertEqual(model.config._attn_implementation, "sdpa")
+        self.assertEqual(model.get_decoder().config._attn_implementation, "sdpa")
+
+    def test_generate_output_cross_attentions_ignored_without_return_dict(self):
+        config, input_ids, _, attention_mask, _, _ = self.model_tester.prepare_config_and_inputs()
+        config._attn_implementation = "eager"
+        model = T5ForConditionalGeneration(config).to(torch_device).eval()
+
+        outputs = model.generate(
+            input_ids.to(torch_device),
+            attention_mask=attention_mask.to(torch_device),
+            max_new_tokens=3,
+            do_sample=False,
+            output_cross_attentions=True,
+        )
+        self.assertIsInstance(outputs, torch.Tensor)
+
     @unittest.skipIf(torch_device == "cpu", "Can't do half precision")
     def test_model_fp16_forward(self):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
